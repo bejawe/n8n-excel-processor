@@ -1,5 +1,6 @@
 import io
-from fastapi import FastAPI, UploadFile, File, HTTPException
+import json
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse
 import openpyxl
 from openpyxl.utils import get_column_letter
@@ -21,57 +22,67 @@ def copy_cell_with_style(source_cell, target_cell):
         target_cell.alignment = copy(source_cell.alignment)
 
 # --- The Main API Endpoint ---
+# It now accepts a file AND a string of panel data
 @app.post("/process-excel-panel/")
-async def process_panel(file: UploadFile = File(...)):
-    """
-    Receives an Excel file, appends a new panel block based on a template,
-    and returns the modified file.
-    """
-    # Ensure the uploaded file is an Excel file
+async def process_panel(panel_data_json: str = Form(...), file: UploadFile = File(...)):
     if not file.filename.endswith(('.xlsx', '.xlsm')):
-        raise HTTPException(status_code=400, detail="Invalid file format. Please upload an .xlsx or .xlsm file.")
+        raise HTTPException(status_code=400, detail="Invalid file format.")
 
     try:
-        # Read the uploaded file directly into memory
+        # --- 1. Load the data ---
+        panel_data = json.loads(panel_data_json)
         contents = await file.read()
         workbook_stream = io.BytesIO(contents)
-
-        # Load the workbook with openpyxl, preserving macros
         wb = openpyxl.load_workbook(workbook_stream, keep_vba=True)
-        
-        # --- This assumes your target sheet is the first one ---
-        # For a specific sheet: ws = wb["YourSheetName"]
-        ws = wb.active
+        ws = wb[panel_data.get("projectName", "")] # Get sheet by project name
 
-        # --- Define the template area to be copied ---
+        if not ws:
+            raise HTTPException(status_code=404, detail=f"Sheet '{panel_data.get('projectName')}' not found in Excel file.")
+
+        # --- 2. Define Template and Find Next Row ---
         TEMPLATE_START_ROW = 7
-        TEMPLATE_END_ROW = 30 # 24 rows total
-        TEMPLATE_START_COL = 1 # Column A
-        TEMPLATE_END_COL = 12 # Column L
-        
-        # Find the next empty row to paste the new panel
-        next_row = ws.max_row + 2 # Add a little space
+        TEMPLATE_END_ROW = 30
+        TEMPLATE_START_COL = 1
+        TEMPLATE_END_COL = 12
+        start_row = ws.max_row + 2
 
-        # --- Copy the template block cell by cell ---
-        for row_offset in range(TEMPLATE_START_ROW, TEMPLATE_END_ROW + 1):
-            for col_offset in range(TEMPLATE_START_COL, TEMPLATE_END_COL + 1):
-                source_cell = ws.cell(row=row_offset, column=col_offset)
-                target_cell = ws.cell(row=next_row + (row_offset - TEMPLATE_START_ROW), column=col_offset)
+        # --- 3. Copy the template block ---
+        for row_idx in range(TEMPLATE_START_ROW, TEMPLATE_END_ROW + 1):
+            for col_idx in range(TEMPLATE_START_COL, TEMPLATE_END_COL + 1):
+                source_cell = ws.cell(row=row_idx, column=col_idx)
+                target_cell = ws.cell(row=start_row + (row_idx - TEMPLATE_START_ROW), column=col_idx)
                 copy_cell_with_style(source_cell, target_cell)
+        
+        # --- 4. Write the NEW data into the copied block ---
+        # This logic is adapted from your n8n 'Code1' node
+        recommendations = panel_data.get("recommendations", [])
+        main_breaker_rec = next((r for r in recommendations if r['breakerSpec'].startswith('MCCB')), None)
+        branch_breaker_recs = [r for r in recommendations if not r['breakerSpec'].startswith('MCCB')]
 
-        # (Optional) Here you would add logic to write the new panel data 
-        # into the newly created block at 'next_row'. For now, it just copies.
+        # Offsets are based on a template starting at row 7
+        ws.cell(row=start_row, column=4).value = panel_data.get("panelName") # D column (4)
+        ws.cell(row=start_row + 11, column=1).value = panel_data.get("sourceImageUrl") # A column (1), offset 11 (row 18)
+        ws.cell(row=start_row + 6, column=7).value = panel_data.get("mountingType", "SURFACE") # G column (7)
+        ws.cell(row=start_row + 7, column=7).value = panel_data.get("ipDegree") # G column (7)
+        ws.cell(row=start_row + 4, column=4).value = panel_data.get("shortCircuitCurrentRating", "10 kA") # D column (4)
+        
+        if main_breaker_rec:
+            ws.cell(row=start_row + 11, column=2).value = main_breaker_rec.get("breakerSpec", "") # B column (2)
+            ws.cell(row=start_row + 11, column=9).value = main_breaker_rec.get("matchedPart", {}).get("Reference number", "no recommendation") # I column (9)
 
-        # Save the modified workbook to an in-memory stream
+        if branch_breaker_recs:
+            for i, rec in enumerate(branch_breaker_recs):
+                row = start_row + 13 + i # Starts at offset 13 (row 20)
+                ws.cell(row=row, column=2).value = rec.get("breakerSpec", "") # B column
+                ws.cell(row=row, column=6).value = rec.get("quantity", 0) # F column
+                ws.cell(row=row, column=9).value = rec.get("matchedPart", {}).get("Reference number", "no recommendation") # I column
+
+        # --- 5. Save and return the modified file ---
         output_stream = io.BytesIO()
         wb.save(output_stream)
-        output_stream.seek(0) # Rewind the stream to the beginning
-
-        return StreamingResponse(
-            output_stream,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": f"attachment; filename=modified_{file.filename}"}
-        )
+        output_stream.seek(0)
+        
+        return StreamingResponse(output_stream, media_type="application/vnd.ms-excel.sheet.macroenabled.12")
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
