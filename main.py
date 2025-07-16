@@ -28,7 +28,8 @@ async def process_panel(request: Request, x_panel_data: str = Header(...)):
         wb = openpyxl.load_workbook(workbook_stream, keep_vba=True)
         
         # --- The rest of your excel logic is the same ---
-        ws = wb.get_sheet_by_name(panel_data.get("projectName", ""))
+        sheet_name = panel_data.get("projectName", "")
+ws = wb[sheet_name] if sheet_name in wb.sheetnames else wb.active
         # ... (all your logic for finding rows, copying cells, and writing data)
 
         # --- 5. Save and return the modified file ---
