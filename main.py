@@ -7,9 +7,8 @@ from copy import copy
 
 app = FastAPI()
 
-# ---------- helper ----------
+# (Helper function 'copy_cell_with_style' remains the same)
 def copy_cell_with_style(src, dst):
-    """Copies value and all style attributes from source_cell to target_cell."""
     dst.value = src.value
     if src.has_style:
         dst.font = copy(src.font)
@@ -19,20 +18,11 @@ def copy_cell_with_style(src, dst):
         dst.protection = copy(src.protection)
         dst.alignment = copy(src.alignment)
 
-# ---------- endpoint ----------
 @app.post("/process-excel-panel/")
 async def process_panel(
     panel_data_json: str = Form(...),
     file: UploadFile = File(...)
 ):
-    """
-    Receives an Excel file and JSON data, modifies the Excel file by appending
-    a new panel block based on a template, writes the panel data into the
-    new block, and returns the modified file.
-    """
-    if not file.filename.lower().endswith((".xlsm", ".xlsx")):
-        raise HTTPException(status_code=400, detail="Invalid file format.")
-
     try:
         # --- 1. Load JSON & Excel ---
         panel_data = json.loads(panel_data_json)
@@ -40,55 +30,44 @@ async def process_panel(
         wb = openpyxl.load_workbook(io.BytesIO(contents), keep_vba=True)
 
         # --- 2. Choose sheet ---
-        # Tries to find a sheet with the given projectName, otherwise uses the active one.
-        sheet_name = panel_data.get("projectName", "")
+        sheet_name = panel_data.get("projectName", "Default")
         ws = wb[sheet_name] if sheet_name in wb.sheetnames else wb.active
-        print(f"DEBUG: sheet chosen = {ws.title}")
+        print(f"DEBUG: Sheet chosen -> {ws.title}")
 
-        # --- 3. Define template bounds & find next available row ---
+        # --- 3. Define template & find next row ---
         TEMPLATE_START_ROW = 7
         TEMPLATE_END_ROW = 30
         next_row = ws.max_row + 2
-        print(f"DEBUG: next_row for new panel = {next_row}")
+        print(f"DEBUG: Next row for panel -> {next_row}")
 
         # --- 4. Copy the template block ---
-        for r_offset in range(TEMPLATE_END_ROW - TEMPLATE_START_ROW + 1):
-            for c in range(1, 13): # Assuming columns A to L
-                src = ws.cell(row=TEMPLATE_START_ROW + r_offset, column=c)
-                dst = ws.cell(row=next_row + r_offset, column=c)
+        for r in range(TEMPLATE_START_ROW, TEMPLATE_END_ROW + 1):
+            for c in range(1, 13):
+                src = ws.cell(row=r, column=c)
+                # Calculate destination row correctly
+                dst = ws.cell(row=next_row + (r - TEMPLATE_START_ROW), column=c)
                 copy_cell_with_style(src, dst)
+        print("DEBUG: Template block copied.")
 
         # --- 5. Write panel data into the new block ---
-        row = next_row  # The starting row of our new block
-
-        # Panel metadata
-        ws.cell(row=row, column=4).value = panel_data.get("panelName")
-        ws.cell(row=row + 11, column=1).value = panel_data.get("sourceImageUrl")
-        ws.cell(row=row + 6, column=7).value = panel_data.get("mountingType", "SURFACE")
-        ws.cell(row=row + 7, column=7).value = panel_data.get("ipDegree")
-
-        recommendations = panel_data.get("recommendations", [])
-
-        # Main breaker (MCCB)
-        main_rec = next((r for r in recommendations if "MCCB" in r.get("breakerSpec", "")), None)
-        if main_rec:
-            ws.cell(row=row + 11, column=2).value = main_rec.get("breakerSpec")
-            ws.cell(row=row + 11, column=9).value = main_rec.get("matchedPart", {}).get("Reference number", "")
-
-        # Branch breakers (non-MCCB)
-        branch_recs = [r for r in recommendations if "MCCB" not in r.get("breakerSpec", "")]
-        for i, rec in enumerate(branch_recs):
-            current_row = row + 13 + i  # Start writing branch breakers at an offset
-            ws.cell(row=current_row, column=2).value = rec.get("breakerSpec")
-            ws.cell(row=current_row, column=6).value = rec.get("quantity")
-            ws.cell(row=current_row, column=9).value = rec.get("matchedPart", {}).get("Reference number", "")
+        row = next_row # Use 'next_row' as the base for the new block
         
-        print("DEBUG: Finished writing panel data.")
+        panelName = panel_data.get("panelName")
+        ws.cell(row=row, column=4).value = panelName
+        print(f"DEBUG: Wrote panelName -> {panelName}")
+
+        sourceImageUrl = panel_data.get("sourceImageUrl")
+        ws.cell(row=row + 11, column=1).value = sourceImageUrl
+        print(f"DEBUG: Wrote sourceImageUrl -> {sourceImageUrl}")
+        
+        # (The rest of the write logic for breakers, etc. would go here)
+        # For now, we are just testing if the basic writing works.
 
         # --- 6. Save and return the modified file ---
         out = io.BytesIO()
         wb.save(out)
         out.seek(0)
+        print("DEBUG: Saved workbook to memory. Returning file.")
         return StreamingResponse(
             out,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -96,6 +75,5 @@ async def process_panel(
         )
 
     except Exception as e:
-        # If any error occurs, return a 500 status with the error details
-        print(f"ERROR: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"An error occurred during Excel processing: {str(e)}")
+        print(f"ERROR: An exception occurred: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
