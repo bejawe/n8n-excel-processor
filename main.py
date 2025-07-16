@@ -52,10 +52,35 @@ async def process_panel(
                 copy_cell_with_style(src, dst)
 
         # --- write panel data into the new block ---
-        ws.cell(row=next_row, column=4).value = panel_data.get("panelName")
-        ws.cell(row=next_row + 11, column=1).value = panel_data.get("sourceImageUrl")
-        ws.cell(row=next_row + 6, column=7).value = panel_data.get("mountingType", "SURFACE")
-        ws.cell(row=next_row + 7, column=7).value = panel_data.get("ipDegree")
+        # === WRITE PANEL DATA ===
+# Row offsets are relative to the *start* of the copied block (next_row)
+
+row = next_row  # first row of the new block
+
+# Panel name
+ws.cell(row=row, column=4).value = panel_data.get("panelName")
+
+# Source image URL
+ws.cell(row=row + 11, column=1).value = panel_data.get("sourceImageUrl")
+
+# Mounting type & IP code
+ws.cell(row=row + 6, column=7).value = panel_data.get("mountingType", "SURFACE")
+ws.cell(row=row + 7, column=7).value = panel_data.get("ipDegree")
+
+# Main breaker
+main_rec = next((r for r in panel_data.get("recommendations", []) if "MCCB" in r["breakerSpec"]), None)
+if main_rec:
+    ws.cell(row=row + 11, column=2).value = main_rec["breakerSpec"]
+    ws.cell(row=row + 11, column=9).value = main_rec["matchedPart"].get("Reference number", "")
+
+# Branch breakers
+for i, rec in enumerate(
+    [r for r in panel_data.get("recommendations", []) if "MCCB" not in r["breakerSpec"]]
+):
+    r = row + 13 + i
+    ws.cell(row=r, column=2).value = rec["breakerSpec"]
+    ws.cell(row=r, column=6).value = rec["quantity"]
+    ws.cell(row=r, column=9).value = rec["matchedPart"].get("Reference number", "")
 
         # main breaker
         main_rec = next((r for r in panel_data.get("recommendations", []) if "MCCB" in r["breakerSpec"]), None)
