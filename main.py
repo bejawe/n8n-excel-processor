@@ -106,10 +106,20 @@ async def process_panel(
         out = io.BytesIO()
         wb.save(out)
         out.seek(0)
+
+        # *** THIS IS THE FIX ***
+        # Determine the correct mime type based on the original file's extension.
+        original_filename = file.filename
+        if original_filename.lower().endswith('.xlsm'):
+            media_type = 'application/vnd.ms-excel.sheet.macroenabled.12'
+        else:
+            media_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            
+        # Return the response with the correct media_type and original filename
         return StreamingResponse(
             out,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": f"attachment; filename=modified_{file.filename}"}
+            media_type=media_type,
+            headers={"Content-Disposition": f"attachment; filename={original_filename}"}
         )
 
     except Exception as e:
