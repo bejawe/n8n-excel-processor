@@ -7,71 +7,79 @@ from copy import copy
 
 app = FastAPI()
 
-# --- Shared Cell Copying Logic ---
-def copy_cell_with_style(source_cell, target_cell):
-    """Copies value and all style attributes from source_cell to target_cell."""
-    target_cell.value = source_cell.value
-    if source_cell.has_style:
-        target_cell.font = copy(source_cell.font)
-        target_cell.border = copy(source_cell.border)
-        target_cell.fill = copy(source_cell.fill)
-        target_cell.number_format = copy(source_cell.number_format)
-        target_cell.protection = copy(source_cell.protection)
-        target_cell.alignment = copy(source_cell.alignment)
+# ---------- helper ----------
+def copy_cell_with_style(src, dst):
+    dst.value = src.value
+    if src.has_style:
+        dst.font = copy(src.font)
+        dst.border = copy(src.border)
+        dst.fill = copy(src.fill)
+        dst.number_format = copy(src.number_format)
+        dst.protection = copy(src.protection)
+        dst.alignment = copy(src.alignment)
 
-# --- Main endpoint (UploadFile + Form) ---
+# ---------- endpoint ----------
 @app.post("/process-excel-panel/")
 async def process_panel(
     panel_data_json: str = Form(...),
     file: UploadFile = File(...)
 ):
-    if not file.filename.endswith((".xlsm", ".xlsx")):
+    if not file.filename.lower().endswith((".xlsm", ".xlsx")):
         raise HTTPException(status_code=400, detail="Invalid file format.")
 
     try:
-        # 1. load JSON
+        # --- load JSON & Excel ---
         panel_data = json.loads(panel_data_json)
+        contents  = await file.read()
+        wb        = openpyxl.load_workbook(io.BytesIO(contents), keep_vba=True)
 
-        # 2. load Excel
-        contents = await file.read()
-        wb = openpyxl.load_workbook(io.BytesIO(contents), keep_vba=True)
-
-        # 3. pick sheet
+        # --- choose sheet ---
         sheet_name = panel_data.get("projectName", "")
         ws = wb[sheet_name] if sheet_name in wb.sheetnames else wb.active
+        print(f"DEBUG: sheet = {ws.title}")
 
-        # ----------------------------------------------------------
-        # 4. YOUR ORIGINAL EXCEL LOGIC GOES HERE
-        # ----------------------------------------------------------
-        # Example template offsets
+        # --- template bounds ---
         TEMPLATE_START_ROW = 7
-        TEMPLATE_END_ROW = 30
-        next_row = ws.max_row + 2
+        TEMPLATE_END_ROW   = 30
+        next_row           = ws.max_row + 2
+        print(f"DEBUG: next_row = {next_row}")
 
-        # copy template block
-        for src_row in range(TEMPLATE_START_ROW, TEMPLATE_END_ROW + 1):
-            for col in range(1, 13):
-                src_cell = ws.cell(row=src_row, column=col)
-                dst_cell = ws.cell(
-                    row=next_row + (src_row - TEMPLATE_START_ROW),
-                    column=col
-                )
-                copy_cell_with_style(src_cell, dst_cell)
+        # --- copy template block (24 rows × 12 cols) ---
+        for r_offset in range(TEMPLATE_END_ROW - TEMPLATE_START_ROW + 1):
+            for c in range(1, 13):
+                src = ws.cell(row=TEMPLATE_START_ROW + r_offset, column=c)
+                dst = ws.cell(row=next_row + r_offset, column=c)
+                copy_cell_with_style(src, dst)
 
-        # example: write panel data
+        # --- write panel data into the new block ---
         ws.cell(row=next_row, column=4).value = panel_data.get("panelName")
-        # … add the rest of your writing logic here …
+        ws.cell(row=next_row + 11, column=1).value = panel_data.get("sourceImageUrl")
+        ws.cell(row=next_row + 6, column=7).value = panel_data.get("mountingType", "SURFACE")
+        ws.cell(row=next_row + 7, column=7).value = panel_data.get("ipDegree")
 
-        # 5. save & return
-        output_stream = io.BytesIO()
-        wb.save(output_stream)
-        output_stream.seek(0)
+        # main breaker
+        main_rec = next((r for r in panel_data.get("recommendations", []) if "MCCB" in r["breakerSpec"]), None)
+        if main_rec:
+            ws.cell(row=next_row + 11, column=2).value = main_rec["breakerSpec"]
+            ws.cell(row=next_row + 11, column=9).value = main_rec["matchedPart"].get("Reference number", "")
 
+        # branch breakers
+        branch_recs = [r for r in panel_data.get("recommendations", []) if "MCCB" not in r["breakerSpec"]]
+        for idx, rec in enumerate(branch_recs):
+            row = next_row + 13 + idx
+            ws.cell(row=row, column=2).value = rec["breakerSpec"]
+            ws.cell(row=row, column=6).value = rec["quantity"]
+            ws.cell(row=row, column=9).value = rec["matchedPart"].get("Reference number", "")
+
+        # --- return new file ---
+        out = io.BytesIO()
+        wb.save(out)
+        out.seek(0)
         return StreamingResponse(
-            output_stream,
+            out,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={"Content-Disposition": f"attachment; filename=modified_{file.filename}"}
         )
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Excel processing error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
