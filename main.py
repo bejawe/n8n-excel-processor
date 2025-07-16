@@ -9,6 +9,7 @@ app = FastAPI()
 
 # ---------- helper ----------
 def copy_cell_with_style(src, dst):
+    """Copies value and all style attributes from source_cell to target_cell."""
     dst.value = src.value
     if src.has_style:
         dst.font = copy(src.font)
@@ -24,79 +25,67 @@ async def process_panel(
     panel_data_json: str = Form(...),
     file: UploadFile = File(...)
 ):
+    """
+    Receives an Excel file and JSON data, modifies the Excel file by appending
+    a new panel block based on a template, writes the panel data into the
+    new block, and returns the modified file.
+    """
     if not file.filename.lower().endswith((".xlsm", ".xlsx")):
         raise HTTPException(status_code=400, detail="Invalid file format.")
 
     try:
-        # --- load JSON & Excel ---
+        # --- 1. Load JSON & Excel ---
         panel_data = json.loads(panel_data_json)
-        contents  = await file.read()
-        wb        = openpyxl.load_workbook(io.BytesIO(contents), keep_vba=True)
+        contents = await file.read()
+        wb = openpyxl.load_workbook(io.BytesIO(contents), keep_vba=True)
 
-        # --- choose sheet ---
+        # --- 2. Choose sheet ---
+        # Tries to find a sheet with the given projectName, otherwise uses the active one.
         sheet_name = panel_data.get("projectName", "")
         ws = wb[sheet_name] if sheet_name in wb.sheetnames else wb.active
-        print(f"DEBUG: sheet = {ws.title}")
+        print(f"DEBUG: sheet chosen = {ws.title}")
 
-        # --- template bounds ---
+        # --- 3. Define template bounds & find next available row ---
         TEMPLATE_START_ROW = 7
-        TEMPLATE_END_ROW   = 30
-        next_row           = ws.max_row + 2
-        print(f"DEBUG: next_row = {next_row}")
+        TEMPLATE_END_ROW = 30
+        next_row = ws.max_row + 2
+        print(f"DEBUG: next_row for new panel = {next_row}")
 
-        # --- copy template block (24 rows × 12 cols) ---
+        # --- 4. Copy the template block ---
         for r_offset in range(TEMPLATE_END_ROW - TEMPLATE_START_ROW + 1):
-            for c in range(1, 13):
+            for c in range(1, 13): # Assuming columns A to L
                 src = ws.cell(row=TEMPLATE_START_ROW + r_offset, column=c)
                 dst = ws.cell(row=next_row + r_offset, column=c)
                 copy_cell_with_style(src, dst)
 
-        # --- write panel data into the new block ---
-        # === WRITE PANEL DATA ===
-# Row offsets are relative to the *start* of the copied block (next_row)
+        # --- 5. Write panel data into the new block ---
+        row = next_row  # The starting row of our new block
 
-row = next_row  # first row of the new block
+        # Panel metadata
+        ws.cell(row=row, column=4).value = panel_data.get("panelName")
+        ws.cell(row=row + 11, column=1).value = panel_data.get("sourceImageUrl")
+        ws.cell(row=row + 6, column=7).value = panel_data.get("mountingType", "SURFACE")
+        ws.cell(row=row + 7, column=7).value = panel_data.get("ipDegree")
 
-# Panel name
-ws.cell(row=row, column=4).value = panel_data.get("panelName")
+        recommendations = panel_data.get("recommendations", [])
 
-# Source image URL
-ws.cell(row=row + 11, column=1).value = panel_data.get("sourceImageUrl")
-
-# Mounting type & IP code
-ws.cell(row=row + 6, column=7).value = panel_data.get("mountingType", "SURFACE")
-ws.cell(row=row + 7, column=7).value = panel_data.get("ipDegree")
-
-# Main breaker
-main_rec = next((r for r in panel_data.get("recommendations", []) if "MCCB" in r["breakerSpec"]), None)
-if main_rec:
-    ws.cell(row=row + 11, column=2).value = main_rec["breakerSpec"]
-    ws.cell(row=row + 11, column=9).value = main_rec["matchedPart"].get("Reference number", "")
-
-# Branch breakers
-for i, rec in enumerate(
-    [r for r in panel_data.get("recommendations", []) if "MCCB" not in r["breakerSpec"]]
-):
-    r = row + 13 + i
-    ws.cell(row=r, column=2).value = rec["breakerSpec"]
-    ws.cell(row=r, column=6).value = rec["quantity"]
-    ws.cell(row=r, column=9).value = rec["matchedPart"].get("Reference number", "")
-
-        # main breaker
-        main_rec = next((r for r in panel_data.get("recommendations", []) if "MCCB" in r["breakerSpec"]), None)
+        # Main breaker (MCCB)
+        main_rec = next((r for r in recommendations if "MCCB" in r.get("breakerSpec", "")), None)
         if main_rec:
-            ws.cell(row=next_row + 11, column=2).value = main_rec["breakerSpec"]
-            ws.cell(row=next_row + 11, column=9).value = main_rec["matchedPart"].get("Reference number", "")
+            ws.cell(row=row + 11, column=2).value = main_rec.get("breakerSpec")
+            ws.cell(row=row + 11, column=9).value = main_rec.get("matchedPart", {}).get("Reference number", "")
 
-        # branch breakers
-        branch_recs = [r for r in panel_data.get("recommendations", []) if "MCCB" not in r["breakerSpec"]]
-        for idx, rec in enumerate(branch_recs):
-            row = next_row + 13 + idx
-            ws.cell(row=row, column=2).value = rec["breakerSpec"]
-            ws.cell(row=row, column=6).value = rec["quantity"]
-            ws.cell(row=row, column=9).value = rec["matchedPart"].get("Reference number", "")
+        # Branch breakers (non-MCCB)
+        branch_recs = [r for r in recommendations if "MCCB" not in r.get("breakerSpec", "")]
+        for i, rec in enumerate(branch_recs):
+            current_row = row + 13 + i  # Start writing branch breakers at an offset
+            ws.cell(row=current_row, column=2).value = rec.get("breakerSpec")
+            ws.cell(row=current_row, column=6).value = rec.get("quantity")
+            ws.cell(row=current_row, column=9).value = rec.get("matchedPart", {}).get("Reference number", "")
+        
+        print("DEBUG: Finished writing panel data.")
 
-        # --- return new file ---
+        # --- 6. Save and return the modified file ---
         out = io.BytesIO()
         wb.save(out)
         out.seek(0)
@@ -107,4 +96,6 @@ for i, rec in enumerate(
         )
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # If any error occurs, return a 500 status with the error details
+        print(f"ERROR: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"An error occurred during Excel processing: {str(e)}")
