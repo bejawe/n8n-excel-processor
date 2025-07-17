@@ -4,116 +4,126 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse
 import openpyxl
 from copy import copy
-from openpyxl.styles import Font
 
 app = FastAPI()
 
-# ---------- Helper Function (No changes needed) ----------
-def copy_cell_with_style(src_cell_info, dst_cell):
-    """
-    Applies style and value from a dictionary (src_cell_info) to a cell object (dst_cell).
-    """
-    dst_cell.value = src_cell_info.get("value")
-    dst_cell.font = copy(src_cell_info.get("font"))
-    dst_cell.border = copy(src_cell_info.get("border"))
-    dst_cell.fill = copy(src_cell_info.get("fill"))
-    dst_cell.number_format = src_cell_info.get("number_format")
-    dst_cell.protection = copy(src_cell_info.get("protection"))
-    dst_cell.alignment = copy(src_cell_info.get("alignment"))
-    # The hyperlink is now handled separately in the main logic
+# ---------- Helper Functions ----------
+
+def copy_cell_with_style(src, dst):
+    """Copies value and all style attributes from source_cell to target_cell."""
+    dst.value = src.value
+    if src.has_style:
+        dst.font = copy(src.font)
+        dst.border = copy(src.border)
+        dst.fill = copy(src.fill)
+        dst.number_format = copy(src.number_format)
+        dst.protection = copy(src.protection)
+        dst.alignment = copy(src.alignment)
 
 def find_last_schedule_row(worksheet, start_row, column_to_check):
-    """Finds the last row of the last schedule by searching upwards for 'TOTAL'"""
+    """
+    Finds the last row of the last schedule by looking for the last
+    instance of 'TOTAL' in a specific column.
+    """
     for row_num in range(worksheet.max_row, start_row - 1, -1):
         cell_value = worksheet.cell(row=row_num, column=column_to_check).value
+        # Check if the cell value is a string and contains "TOTAL"
         if isinstance(cell_value, str) and "TOTAL" in cell_value.upper():
             return row_num
+    # If no schedule is found, return the end of the template as a default
     return 30
-
-def is_template_empty(worksheet, check_row, check_col):
-    """Checks if the template is empty by looking at cell I18."""
-    # Check both value and hyperlink to be certain
-    cell = worksheet.cell(row=check_row, column=check_col)
-    return cell.value is None and cell.hyperlink is None
 
 
 # ---------- Main API Endpoint ----------
+
 @app.post("/process-excel-panel/")
 async def process_panel(
     panel_data_json: str = Form(...),
     file: UploadFile = File(...)
 ):
+    """
+    Receives an Excel file and JSON data, inserts a new schedule block
+    by pushing existing content down, and writes panel data into the new block.
+    """
     if not file.filename.lower().endswith((".xlsm", ".xlsx")):
         raise HTTPException(status_code=400, detail="Invalid file format.")
 
     try:
-        # --- 1. Load & 2. Choose Sheet ---
+        # --- 1. Load JSON & Excel ---
         panel_data = json.loads(panel_data_json)
         contents = await file.read()
         wb = openpyxl.load_workbook(io.BytesIO(contents), keep_vba=True)
+
+        # --- 2. Choose sheet ---
         sheet_name = panel_data.get("projectName", "Default")
         ws = wb[sheet_name] if sheet_name in wb.sheetnames else wb.active
 
-        # --- 3. Read the Original Template into Memory (The Key Fix) ---
+        # --- 3. Find Insertion Point & Define Template ---
         TEMPLATE_START_ROW = 7
         TEMPLATE_END_ROW = 30
         TEMPLATE_HEIGHT = TEMPLATE_END_ROW - TEMPLATE_START_ROW + 1
         
-        template_data = []
+        # Find the row of the "TOTAL" line of the last schedule
+        last_schedule_row = find_last_schedule_row(ws, start_row=TEMPLATE_START_ROW, column_to_check=3)  # Check Col C
+        insertion_row = last_schedule_row + 1
+
+        # --- 4. Insert Blank Rows ---
+        ws.insert_rows(insertion_row, amount=TEMPLATE_HEIGHT)
+
+        # --- 5. Copy Template to New Blank Space ---
         for r_offset in range(TEMPLATE_HEIGHT):
-            row_data = []
-            for c in range(1, 13):
-                cell = ws.cell(row=TEMPLATE_START_ROW + r_offset, column=c)
-                row_data.append({
-                    "value": cell.value,
-                    "font": cell.font,
-                    "border": cell.border,
-                    "fill": cell.fill,
-                    "number_format": cell.number_format,
-                    "protection": cell.protection,
-                    "alignment": cell.alignment
-                })
-            template_data.append(row_data)
-
-        # --- 4. Determine where to write ---
-        if is_template_empty(ws, check_row=18, check_col=9):
-            write_row = TEMPLATE_START_ROW
-        else:
-            last_schedule_row = find_last_schedule_row(ws, start_row=TEMPLATE_START_ROW, column_to_check=3)
-            insertion_row = last_schedule_row + 1
-            
-            # Insert blank rows
-            ws.insert_rows(insertion_row, amount=TEMPLATE_HEIGHT)
-            
-            # Paste the IN-MEMORY template into the new space
-            for r_offset in range(TEMPLATE_HEIGHT):
-                for c_offset in range(12):
-                    dst_cell = ws.cell(row=insertion_row + r_offset, column=c_offset + 1)
-                    copy_cell_with_style(template_data[r_offset][c_offset], dst_cell)
-            
-            write_row = insertion_row
-
-        # --- 5. Write New Panel Data into the target block ---
-        row = write_row
+            for c in range(1, 13):  # Columns A to L
+                src_cell = ws.cell(row=TEMPLATE_START_ROW + r_offset, column=c)
+                dst_cell = ws.cell(row=insertion_row + r_offset, column=c)
+                copy_cell_with_style(src_cell, dst_cell)
         
-        # (The rest of your data writing logic is unchanged and will now work correctly)
+        # --- 6. Write Panel Data into the New Block ---
+        row = insertion_row  # The base row for writing is the insertion row
+        
+        # Panel metadata
         ws.cell(row=row, column=4).value = panel_data.get("panelName")
-        link_cell = ws.cell(row=row + 11, column=1)
-        source_image_url = panel_data.get("sourceImageUrl")
-        if source_image_url:
+        
+        # --- clickable hyperlink -------------------------------------------------
+        source_url = panel_data.get("sourceImageUrl")
+        if source_url:
+            link_cell = ws.cell(row=row + 11, column=1)
             link_cell.value = "panel image"
-            link_cell.hyperlink = source_image_url
-            link_cell.font = Font(color="0000FF", underline="single")
-        #... (rest of the breaker data)
+            link_cell.hyperlink = source_url
+            link_cell.style = "Hyperlink"  # blue/underlined Excel style
+        # --------------------------------------------------------------------------
+        
+        ws.cell(row=row + 6, column=7).value = panel_data.get("mountingType", "SURFACE")
+        ws.cell(row=row + 7, column=7).value = panel_data.get("ipDegree")
+        
+        recommendations = panel_data.get("recommendations", [])
+        
+        # Main breaker
+        main_rec = next((r for r in recommendations if "MCCB" in r.get("breakerSpec", "")), None)
+        if main_rec:
+            ws.cell(row=row + 11, column=2).value = main_rec.get("breakerSpec")
+            ws.cell(row=row + 11, column=9).value = main_rec.get("matchedPart", {}).get("Reference number", "")
+            
+        # Branch breakers
+        branch_recs = [r for r in recommendations if "MCCB" not in r.get("breakerSpec", "")]
+        for i, rec in enumerate(branch_recs):
+            current_row = row + 13 + i
+            ws.cell(row=current_row, column=2).value = rec.get("breakerSpec")
+            ws.cell(row=current_row, column=6).value = rec.get("quantity")
+            ws.cell(row=current_row, column=9).value = rec.get("matchedPart", {}).get("Reference number", "")
 
-        # --- 6. Save and Return ---
+        # --- 7. Save and return the modified file ---
         out = io.BytesIO()
         wb.save(out)
         out.seek(0)
-        
+
+        # Determine the correct mime type based on the original file's extension.
         original_filename = file.filename
-        media_type = 'application/vnd.ms-excel.sheet.macroenabled.12' if original_filename.lower().endswith('.xlsm') else 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        if original_filename.lower().endswith('.xlsm'):
+            media_type = 'application/vnd.ms-excel.sheet.macroenabled.12'
+        else:
+            media_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             
+        # Return the response with the correct media_type and original filename
         return StreamingResponse(
             out,
             media_type=media_type,
