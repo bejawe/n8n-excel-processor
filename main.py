@@ -4,13 +4,14 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse
 import openpyxl
 from copy import copy
+from openpyxl.styles import Font # <-- ADD THIS IMPORT FOR STYLING
 
 app = FastAPI()
 
 # ---------- Helper Functions ----------
 
 def copy_cell_with_style(src, dst):
-    """Copies value and all style attributes from source_cell to target_cell."""
+    # ... (this function remains the same)
     dst.value = src.value
     if src.has_style:
         dst.font = copy(src.font)
@@ -21,16 +22,11 @@ def copy_cell_with_style(src, dst):
         dst.alignment = copy(src.alignment)
 
 def find_last_schedule_row(worksheet, start_row, column_to_check):
-    """
-    Finds the last row of the last schedule by looking for the last
-    instance of 'TOTAL' in a specific column.
-    """
+    # ... (this function remains the same)
     for row_num in range(worksheet.max_row, start_row - 1, -1):
         cell_value = worksheet.cell(row=row_num, column=column_to_check).value
-        # Check if the cell value is a string and contains "TOTAL"
         if isinstance(cell_value, str) and "TOTAL" in cell_value.upper():
             return row_num
-    # If no schedule is found, return the end of the template as a default
     return 30
 
 
@@ -41,14 +37,13 @@ async def process_panel(
     panel_data_json: str = Form(...),
     file: UploadFile = File(...)
 ):
-    """
-    Receives an Excel file and JSON data, inserts a new schedule block
-    by pushing existing content down, and writes panel data into the new block.
-    """
+    # ... (the start of the function remains the same)
     if not file.filename.lower().endswith((".xlsm", ".xlsx")):
         raise HTTPException(status_code=400, detail="Invalid file format.")
 
     try:
+        # ... (steps 1-5 remain the same: Load, Choose Sheet, Find Row, Insert, Copy)
+        
         # --- 1. Load JSON & Excel ---
         panel_data = json.loads(panel_data_json)
         contents = await file.read()
@@ -63,8 +58,7 @@ async def process_panel(
         TEMPLATE_END_ROW = 30
         TEMPLATE_HEIGHT = TEMPLATE_END_ROW - TEMPLATE_START_ROW + 1
         
-        # Find the row of the "TOTAL" line of the last schedule
-        last_schedule_row = find_last_schedule_row(ws, start_row=TEMPLATE_START_ROW, column_to_check=3) # Check Col C
+        last_schedule_row = find_last_schedule_row(ws, start_row=TEMPLATE_START_ROW, column_to_check=3)
         insertion_row = last_schedule_row + 1
 
         # --- 4. Insert Blank Rows ---
@@ -72,29 +66,43 @@ async def process_panel(
 
         # --- 5. Copy Template to New Blank Space ---
         for r_offset in range(TEMPLATE_HEIGHT):
-            for c in range(1, 13): # Columns A to L
+            for c in range(1, 13):
                 src_cell = ws.cell(row=TEMPLATE_START_ROW + r_offset, column=c)
                 dst_cell = ws.cell(row=insertion_row + r_offset, column=c)
                 copy_cell_with_style(src_cell, dst_cell)
         
         # --- 6. Write Panel Data into the New Block ---
-        row = insertion_row # The base row for writing is the insertion row
+        row = insertion_row
         
         # Panel metadata
         ws.cell(row=row, column=4).value = panel_data.get("panelName")
-        ws.cell(row=row + 11, column=1).value = panel_data.get("sourceImageUrl")
+        
+        # *** THIS IS THE NEW HYPERLINK LOGIC ***
+        # Get the URL from the panel data
+        source_image_url = panel_data.get("sourceImageUrl")
+        # Target the specific cell (A18 in the new block)
+        link_cell = ws.cell(row=row + 11, column=1)
+        
+        # Check if a URL was actually provided
+        if source_image_url:
+            # Set the visible text of the cell
+            link_cell.value = "panel image"
+            # Set the hyperlink property of the cell
+            link_cell.hyperlink = source_image_url
+            # Add blue, underlined font to make it look like a link
+            link_cell.font = Font(color="0000FF", underline="single")
+        
         ws.cell(row=row + 6, column=7).value = panel_data.get("mountingType", "SURFACE")
         ws.cell(row=row + 7, column=7).value = panel_data.get("ipDegree")
         
         recommendations = panel_data.get("recommendations", [])
         
-        # Main breaker
+        # ... (the rest of the breaker logic remains the same)
         main_rec = next((r for r in recommendations if "MCCB" in r.get("breakerSpec", "")), None)
         if main_rec:
             ws.cell(row=row + 11, column=2).value = main_rec.get("breakerSpec")
             ws.cell(row=row + 11, column=9).value = main_rec.get("matchedPart", {}).get("Reference number", "")
             
-        # Branch breakers
         branch_recs = [r for r in recommendations if "MCCB" not in r.get("breakerSpec", "")]
         for i, rec in enumerate(branch_recs):
             current_row = row + 13 + i
@@ -103,19 +111,17 @@ async def process_panel(
             ws.cell(row=current_row, column=9).value = rec.get("matchedPart", {}).get("Reference number", "")
 
         # --- 7. Save and return the modified file ---
+        # ... (this part remains the same)
         out = io.BytesIO()
         wb.save(out)
         out.seek(0)
-
-        # *** THIS IS THE FIX ***
-        # Determine the correct mime type based on the original file's extension.
+        
         original_filename = file.filename
         if original_filename.lower().endswith('.xlsm'):
             media_type = 'application/vnd.ms-excel.sheet.macroenabled.12'
         else:
             media_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             
-        # Return the response with the correct media_type and original filename
         return StreamingResponse(
             out,
             media_type=media_type,
