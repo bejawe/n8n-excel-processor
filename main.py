@@ -19,6 +19,7 @@ def copy_cell_with_style(src, dst):
         dst.number_format = copy(src.number_format)
         dst.protection = copy(src.protection)
         dst.alignment = copy(src.alignment)
+    # Explicitly DO NOT copy hyperlink - this prevents interference
 
 def find_last_schedule_row(worksheet, start_row, column_to_check):
     """
@@ -83,14 +84,20 @@ async def process_panel(
         # Panel metadata
         ws.cell(row=row, column=4).value = panel_data.get("panelName")
         
-        # *** HYPERLINK IMPLEMENTATION ***
+        # *** FIXED HYPERLINK IMPLEMENTATION ***
         # Create clickable hyperlink for panel image
         source_image_url = panel_data.get("sourceImageUrl")
         if source_image_url:
             hyperlink_cell = ws.cell(row=row + 11, column=1)
+            
+            # CRITICAL FIX: Clear any existing hyperlink first
+            hyperlink_cell.hyperlink = None
+            
+            # Now set the new hyperlink
             hyperlink_cell.value = "panel image"
             hyperlink_cell.hyperlink = source_image_url
-            # Optional: Style the hyperlink to look like a typical hyperlink
+            
+            # Style the hyperlink
             hyperlink_cell.font = openpyxl.styles.Font(color="0000FF", underline="single")
         
         ws.cell(row=row + 6, column=7).value = panel_data.get("mountingType", "SURFACE")
