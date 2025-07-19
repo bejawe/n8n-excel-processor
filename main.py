@@ -10,7 +10,7 @@ from openpyxl.formula.translate import Translator
 app = FastAPI()
 
 # ==============================================================================
-# FINAL, VALIDATED HELPER FUNCTIONS
+# HELPER FUNCTIONS (These are validated and unchanged)
 # ==============================================================================
 def copy_cell_with_formula_translation(src_cell, dst_cell):
     """
@@ -50,7 +50,7 @@ def is_template_empty(worksheet, check_row, check_col):
     return cell_value is None or "N/A" in str(cell_value)
 
 # ==============================================================================
-# FINAL, VALIDATED MAIN API ENDPOINT
+# MAIN API ENDPOINT
 # ==============================================================================
 @app.post("/process-excel-panel/")
 async def process_panel(
@@ -107,18 +107,17 @@ async def process_panel(
         
         main_rec = next((r for r in recommendations if "MCCB" in r.get("breakerSpec", "")), None)
         if main_rec:
-            ws_to_modify.cell(row=row + 11, column=2).value = main_rec.get("breakerSpec")
+            # The line for column B has been removed. We only write the Part Number to column I.
             ws_to_modify.cell(row=row + 11, column=9).value = main_rec.get("matchedPart", {}).get("Reference number", "")
         
         branch_recs = [r for r in recommendations if "MCCB" not in r.get("breakerSpec", "")]
         for i, rec in enumerate(branch_recs):
             current_row = row + 13 + i
             if current_row <= (row + TEMPLATE_HEIGHT - 1):
-                ws_to_modify.cell(row=current_row, column=2).value = rec.get("breakerSpec")
+                # The line for column B has been removed. We only write the Part Number and Quantity.
                 ws_to_modify.cell(row=current_row, column=6).value = rec.get("quantity")
                 ws_to_modify.cell(row=current_row, column=9).value = rec.get("matchedPart", {}).get("Reference number", "")
         
-        # Write the TOTAL text to ensure the next panel is found correctly
         ws_to_modify.cell(row=row + 23, column=3).value = "TOTAL"
         
         # --- Save and Return ---
