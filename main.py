@@ -11,13 +11,9 @@ from openpyxl.utils import get_column_letter
 app = FastAPI()
 
 # ==============================================================================
-# HELPER FUNCTIONS (Validated and Unchanged)
+# FINAL, VALIDATED HELPER FUNCTIONS
 # ==============================================================================
 def copy_cell_with_formula_translation(src_cell, dst_cell):
-    """
-    Copies value, style, and hyperlink. If the value is a formula, it translates
-    the formula to the new location.
-    """
     if src_cell.hyperlink:
         dst_cell.hyperlink = copy(src_cell.hyperlink)
     if src_cell.has_style:
@@ -38,7 +34,6 @@ def copy_cell_with_formula_translation(src_cell, dst_cell):
         dst_cell.value = src_cell.value
 
 def find_last_schedule_row(worksheet, start_row, column_to_check):
-    """Finds the last row of the last schedule by searching upwards for 'TOTAL'."""
     for row_num in range(worksheet.max_row, start_row, -1):
         cell_value = worksheet.cell(row=row_num, column=column_to_check).value
         if isinstance(cell_value, str) and "TOTAL" in cell_value.upper():
@@ -46,12 +41,11 @@ def find_last_schedule_row(worksheet, start_row, column_to_check):
     return 30
 
 def is_template_empty(worksheet, check_row, check_col):
-    """Checks if a panel has been written by looking for a PART NUMBER."""
     cell_value = worksheet.cell(row=check_row, column=check_col).value
     return cell_value is None or "N/A" in str(cell_value)
 
 # ==============================================================================
-# MAIN API ENDPOINT
+# FINAL, VALIDATED MAIN API ENDPOINT
 # ==============================================================================
 @app.post("/process-excel-panel/")
 async def process_panel(
@@ -83,36 +77,58 @@ async def process_panel(
             insertion_row = last_schedule_row + 1
             ws_to_modify.insert_rows(insertion_row, amount=TEMPLATE_HEIGHT)
 
-            # --- Step 1: Copy all cell data and styles (with formula translation) ---
+            # Step 1: Copy cell contents and styles
             for r_offset in range(TEMPLATE_HEIGHT):
-                for c in range(1, TEMPLATE_COLUMN_COUNT + 1): # A to AR
+                for c in range(1, TEMPLATE_COLUMN_COUNT + 1):
                     src_cell = pristine_ws.cell(row=TEMPLATE_START_ROW + r_offset, column=c)
                     dst_cell = ws_to_modify.cell(row=insertion_row + r_offset, column=c)
                     copy_cell_with_formula_translation(src_cell, dst_cell)
             
-            # --- Step 2 (THE FIX): Copy all row heights and column widths ---
-            # Copy row dimensions (height)
+            # Step 2: Copy row dimensions
             for r_offset in range(TEMPLATE_HEIGHT):
-                source_row = TEMPLATE_START_ROW + r_offset
-                destination_row = insertion_row + r_offset
-                source_height = pristine_ws.row_dimensions[source_row].height
-                if source_height is not None:
-                    ws_to_modify.row_dimensions[destination_row].height = source_height
+                source_row_index = TEMPLATE_START_ROW + r_offset
+                destination_row_index = insertion_row + r_offset
+                if source_row_index in pristine_ws.row_dimensions:
+                    source_height = pristine_ws.row_dimensions[source_row_index].height
+                    if source_height is not None:
+                        ws_to_modify.row_dimensions[destination_row_index].height = source_height
 
             write_row = insertion_row
 
-        # Copy column dimensions (width) for the entire sheet for consistency
+        # Copy column dimensions for the entire sheet to ensure consistency
         for i in range(1, TEMPLATE_COLUMN_COUNT + 1):
             column_letter = get_column_letter(i)
-            source_width = pristine_ws.column_dimensions[column_letter].width
-            if source_width is not None:
-                ws_to_modify.column_dimensions[column_letter].width = source_width
+            if column_letter in pristine_ws.column_dimensions:
+                source_width = pristine_ws.column_dimensions[column_letter].width
+                if source_width is not None:
+                    ws_to_modify.column_dimensions[column_letter].width = source_width
         
-        # --- Write Panel-Specific Data into the Target Block ---
+        # --- Write Panel-Specific Data ---
         row = write_row
         
         ws_to_modify.cell(row=row, column=4).value = panel_data.get("panelName")
-        # ( ... other data writing logic ... )
+        ws_to_modify.cell(row=row + 6, column=7).value = panel_data.get("mountingType", "SURFACE")
+        ws_to_modify.cell(row=row + 7, column=7).value = panel_data.get("ipDegree")
+
+        link_cell = ws_to_modify.cell(row=row + 11, column=1)
+        source_image_url = panel_data.get("sourceImageUrl")
+        if source_image_url:
+            link_cell.value = "panel image"
+            link_cell.hyperlink = source_image_url
+            link_cell.font = Font(color="0000FF", underline="single")
+
+        recommendations = panel_data.get("recommendations", [])
+        
+        main_rec = next((r for r in recommendations if "MCCB" in r.get("breakerSpec", "")), None)
+        if main_rec:
+            ws_to_modify.cell(row=row + 11, column=9).value = main_rec.get("matchedPart", {}).get("Reference number", "")
+        
+        branch_recs = [r for r in recommendations if "MCCB" not in r.get("breakerSpec", "")]
+        for i, rec in enumerate(branch_recs):
+            current_row = row + 13 + i
+            if current_row <= (row + TEMPLATE_HEIGHT - 1):
+                ws_to_modify.cell(row=current_row, column=6).value = rec.get("quantity")
+                ws_to_modify.cell(row=current_row, column=9).value = rec.get("matchedPart", {}).get("Reference number", "")
         
         ws_to_modify.cell(row=row + 23, column=3).value = "TOTAL"
         
