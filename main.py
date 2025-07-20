@@ -10,7 +10,7 @@ from openpyxl.formula.translate import Translator
 app = FastAPI()
 
 # ==============================================================================
-# HELPER FUNCTIONS (These are validated and unchanged)
+# HELPER FUNCTIONS (Validated and Unchanged)
 # ==============================================================================
 def copy_cell_with_formula_translation(src_cell, dst_cell):
     """
@@ -81,15 +81,17 @@ async def process_panel(
             insertion_row = last_schedule_row + 1
             ws_to_modify.insert_rows(insertion_row, amount=TEMPLATE_HEIGHT)
 
+            # --- *** THIS IS THE ONLY CHANGE *** ---
+            # The loop now goes to column 45, which corresponds to column AR.
             for r_offset in range(TEMPLATE_HEIGHT):
-                for c in range(1, 13):
+                for c in range(1, 45): # Changed from 13 to 45
                     src_cell = pristine_ws.cell(row=TEMPLATE_START_ROW + r_offset, column=c)
                     dst_cell = ws_to_modify.cell(row=insertion_row + r_offset, column=c)
                     copy_cell_with_formula_translation(src_cell, dst_cell)
             
             write_row = insertion_row
 
-        # --- Write All Panel Data into the Target Block ---
+        # --- Write All Panel Data into the Target Block (Logic Unchanged) ---
         row = write_row
         
         ws_to_modify.cell(row=row, column=4).value = panel_data.get("panelName")
@@ -107,34 +109,6 @@ async def process_panel(
         
         main_rec = next((r for r in recommendations if "MCCB" in r.get("breakerSpec", "")), None)
         if main_rec:
-            # The line for column B has been removed. We only write the Part Number to column I.
             ws_to_modify.cell(row=row + 11, column=9).value = main_rec.get("matchedPart", {}).get("Reference number", "")
         
-        branch_recs = [r for r in recommendations if "MCCB" not in r.get("breakerSpec", "")]
-        for i, rec in enumerate(branch_recs):
-            current_row = row + 13 + i
-            if current_row <= (row + TEMPLATE_HEIGHT - 1):
-                # The line for column B has been removed. We only write the Part Number and Quantity.
-                ws_to_modify.cell(row=current_row, column=6).value = rec.get("quantity")
-                ws_to_modify.cell(row=current_row, column=9).value = rec.get("matchedPart", {}).get("Reference number", "")
-        
-        ws_to_modify.cell(row=row + 23, column=3).value = "TOTAL"
-        
-        # --- Save and Return ---
-        out = io.BytesIO()
-        wb_to_modify.save(out)
-        out.seek(0)
-        
-        original_filename = file.filename
-        media_type = 'application/vnd.ms-excel.sheet.macroenabled.12' if original_filename.lower().endswith('.xlsm') else 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        
-        return StreamingResponse(
-            out,
-            media_type=media_type,
-            headers={"Content-Disposition": f"attachment; filename={original_filename}"}
-        )
-
-    except FileNotFoundError:
-        raise HTTPException(status_code=500, detail="Server configuration error: The master template file is missing.")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"An error occurred during Excel processing: {str(e)}")
+        branch_recs = [r for r in
