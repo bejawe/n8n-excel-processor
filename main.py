@@ -13,7 +13,6 @@ app = FastAPI()
 # ==============================================================================
 # HELPER FUNCTIONS (Validated and Unchanged)
 # ==============================================================================
-# (All helper functions like copy_cell_with_formula_translation, find_last_schedule_row, etc., remain the same)
 def copy_cell_with_formula_translation(src_cell, dst_cell):
     if src_cell.hyperlink:
         dst_cell.hyperlink = copy(src_cell.hyperlink)
@@ -24,12 +23,15 @@ def copy_cell_with_formula_translation(src_cell, dst_cell):
         dst_cell.number_format = copy(src_cell.number_format)
         dst_cell.protection = copy(src_cell.protection)
         dst_cell.alignment = copy(src_cell.alignment)
+
     if src_cell.value and isinstance(src_cell.value, str) and src_cell.value.startswith('='):
         try:
             translator = Translator(formula=src_cell.value, origin=src_cell.coordinate)
             dst_cell.value = translator.translate_formula(dst_cell.coordinate)
-        except Exception: dst_cell.value = src_cell.value
-    else: dst_cell.value = src_cell.value
+        except Exception:
+            dst_cell.value = src_cell.value
+    else:
+        dst_cell.value = src_cell.value
 
 def find_last_schedule_row(worksheet, start_row, column_to_check):
     for row_num in range(worksheet.max_row, start_row, -1):
@@ -54,11 +56,12 @@ async def process_panel(
         raise HTTPException(status_code=400, detail="Invalid file format.")
 
     try:
-        # --- This entire section is your last working code, UNCHANGED ---
         panel_data = json.loads(panel_data_json)
         contents = await file.read()
+        
         wb_to_modify = openpyxl.load_workbook(io.BytesIO(contents), keep_vba=True)
         ws_to_modify = wb_to_modify.active
+        
         pristine_template_wb = openpyxl.load_workbook('template.xlsm', keep_vba=True)
         pristine_ws = pristine_template_wb.active
 
@@ -110,43 +113,30 @@ async def process_panel(
             if part_num_is_default and qty_is_default:
                 ws_to_modify.delete_rows(row_to_check, 1)
 
-        # --- *** NEW LOGIC: The "Floating Footer" *** ---
-        # This logic only runs for panels AFTER the first one.
+        # --- *** NEW, SIMPLIFIED, AND CORRECT LOGIC: The "Floating Footer" *** ---
         if not is_first_panel_run:
-            FOOTER_HEIGHT = 6 # The footer is 6 rows high (e.g., 24-29)
+            FOOTER_HEIGHT = 6
             
-            # 1. Find the end of the schedule we just compacted.
+            # 1. Find the end of the newly compacted schedule.
             final_schedule_end_row = find_last_schedule_row(ws_to_modify, start_row=write_row, column_to_check=3)
             
-            # 2. The footer is currently right after the PREVIOUS schedule.
-            # We need to find where the previous total was to locate the footer.
-            # A simple way is to know that the new panel was inserted at last_schedule_row + 1.
-            # So the footer must start right after the *new* total.
+            # 2. Find the footer's current start row by a unique value.
+            #    We assume the footer is right after the new panel was added.
+            footer_current_start_row = last_schedule_row + 1
             
-            # Let's find the footer's actual current start row. It will be immediately
-            # after the *second to last* 'TOTAL' in the sheet.
-            # To simplify, we can assume its position relative to the new panel.
+            # 3. The new, correct location is right after the final schedule's total.
+            new_footer_start_row = final_schedule_end_row + 1
             
-            # Simplified approach: Let's find the footer by a known cell value, e.g., "Eng'r Motaz Abu Jubara"
-            footer_current_start_row = 0
-            for r in range(1, ws_to_modify.max_row + 1):
-                if ws_to_modify.cell(row=r, column=2).value == "Eng'r Motaz Abu Jubara":
-                     footer_current_start_row = r - 1 # The footer block starts one row above this cell
-                     break
+            # 4. Calculate how many rows to shift the block.
+            row_shift = new_footer_start_row - footer_current_start_row
             
-            if footer_current_start_row > 0:
-                # 3. The new location for the footer is right after the final schedule's total.
-                new_footer_start_row = final_schedule_end_row + 1
-                
-                # 4. Define the range to move, e.g., "A24:AR29"
-                move_range_str = f"A{footer_current_start_row}:AR{footer_current_start_row + FOOTER_HEIGHT - 1}"
-                
-                # 5. Calculate how many rows to shift the block down
-                row_shift = new_footer_start_row - footer_current_start_row
-                
-                # 6. Use the built-in `move_range` to safely "cut and paste" the footer
-                ws_to_modify.move_range(move_range_str, rows=row_shift, translate=True)
-
+            # 5. Define the range to move, e.g., "A31:AR36"
+            move_range_str = f"A{footer_current_start_row}:AR{footer_current_start_row + FOOTER_HEIGHT - 1}"
+            
+            # 6. Use the built-in `move_range` to safely "cut and paste" the footer.
+            #    `translate=True` ensures formulas inside the footer are also adjusted.
+            if row_shift != 0:
+                 ws_to_modify.move_range(move_range_str, rows=row_shift, translate=True)
 
         # --- Save and Return ---
         out = io.BytesIO()
