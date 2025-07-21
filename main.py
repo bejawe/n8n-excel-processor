@@ -11,7 +11,7 @@ from openpyxl.utils import get_column_letter
 app = FastAPI()
 
 # ==============================================================================
-# FINAL, VALIDATED HELPER FUNCTIONS
+# HELPER FUNCTIONS (Validated and Unchanged)
 # ==============================================================================
 def copy_cell_with_formula_translation(src_cell, dst_cell):
     if src_cell.hyperlink:
@@ -45,7 +45,7 @@ def is_template_empty(worksheet, check_row, check_col):
     return cell_value is None or "N/A" in str(cell_value)
 
 # ==============================================================================
-# FINAL, VALIDATED MAIN API ENDPOINT
+# MAIN API ENDPOINT
 # ==============================================================================
 @app.post("/process-excel-panel/")
 async def process_panel(
@@ -68,7 +68,7 @@ async def process_panel(
         TEMPLATE_START_ROW = 7
         TEMPLATE_END_ROW = 30
         TEMPLATE_HEIGHT = TEMPLATE_END_ROW - TEMPLATE_START_ROW + 1
-        TEMPLATE_COLUMN_COUNT = 44 # A to AR
+        TEMPLATE_COLUMN_COUNT = 44
 
         if is_template_empty(ws_to_modify, check_row=20, check_col=9):
             write_row = TEMPLATE_START_ROW
@@ -77,31 +77,26 @@ async def process_panel(
             insertion_row = last_schedule_row + 1
             ws_to_modify.insert_rows(insertion_row, amount=TEMPLATE_HEIGHT)
 
-            # Step 1: Copy cell contents and styles
+            # Copy cell contents and styles
             for r_offset in range(TEMPLATE_HEIGHT):
                 for c in range(1, TEMPLATE_COLUMN_COUNT + 1):
                     src_cell = pristine_ws.cell(row=TEMPLATE_START_ROW + r_offset, column=c)
                     dst_cell = ws_to_modify.cell(row=insertion_row + r_offset, column=c)
                     copy_cell_with_formula_translation(src_cell, dst_cell)
             
-            # Step 2: Copy row dimensions
+            # Copy row and column dimensions for formatting
             for r_offset in range(TEMPLATE_HEIGHT):
                 source_row_index = TEMPLATE_START_ROW + r_offset
                 destination_row_index = insertion_row + r_offset
                 if source_row_index in pristine_ws.row_dimensions:
-                    source_height = pristine_ws.row_dimensions[source_row_index].height
-                    if source_height is not None:
-                        ws_to_modify.row_dimensions[destination_row_index].height = source_height
+                    ws_to_modify.row_dimensions[destination_row_index].height = pristine_ws.row_dimensions[source_row_index].height
 
             write_row = insertion_row
 
-        # Copy column dimensions for the entire sheet to ensure consistency
         for i in range(1, TEMPLATE_COLUMN_COUNT + 1):
             column_letter = get_column_letter(i)
             if column_letter in pristine_ws.column_dimensions:
-                source_width = pristine_ws.column_dimensions[column_letter].width
-                if source_width is not None:
-                    ws_to_modify.column_dimensions[column_letter].width = source_width
+                ws_to_modify.column_dimensions[column_letter].width = pristine_ws.column_dimensions[column_letter].width
         
         # --- Write Panel-Specific Data ---
         row = write_row
@@ -132,6 +127,26 @@ async def process_panel(
         
         ws_to_modify.cell(row=row + 23, column=3).value = "TOTAL"
         
+        # --- *** NEW LOGIC: Clean Up Unused "OUTGOINGS" Rows *** ---
+        # Define the range of the 10 "OUTGOINGS" rows for the panel we just wrote
+        outgoings_start_row = row + 13 # e.g., row 20 for the first panel
+        outgoings_end_row = row + 22   # 10 rows total
+
+        # Loop backwards from the last OUTGOINGS row to the first
+        for row_to_check in range(outgoings_end_row, outgoings_start_row - 1, -1):
+            qty_cell = ws_to_modify.cell(row=row_to_check, column=6)      # Column F
+            part_num_cell = ws_to_modify.cell(row=row_to_check, column=9) # Column I
+
+            # Check if Part Number is empty/default "N/A"
+            part_num_is_default = (part_num_cell.value is None or "N/A" in str(part_num_cell.value))
+            
+            # Check if Quantity is the default value of 1
+            qty_is_default = (qty_cell.value == 1)
+
+            # If BOTH are true, the row is unused and should be deleted
+            if part_num_is_default and qty_is_default:
+                ws_to_modify.delete_rows(row_to_check, 1)
+
         # --- Save and Return ---
         out = io.BytesIO()
         wb_to_modify.save(out)
