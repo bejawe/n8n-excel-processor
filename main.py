@@ -56,12 +56,11 @@ async def process_panel(
         raise HTTPException(status_code=400, detail="Invalid file format.")
 
     try:
+        # --- This section is your working code, UNCHANGED ---
         panel_data = json.loads(panel_data_json)
         contents = await file.read()
-        
         wb_to_modify = openpyxl.load_workbook(io.BytesIO(contents), keep_vba=True)
         ws_to_modify = wb_to_modify.active
-        
         pristine_template_wb = openpyxl.load_workbook('template.xlsm', keep_vba=True)
         pristine_ws = pristine_template_wb.active
 
@@ -113,30 +112,38 @@ async def process_panel(
             if part_num_is_default and qty_is_default:
                 ws_to_modify.delete_rows(row_to_check, 1)
 
-        # --- *** NEW, SIMPLIFIED, AND CORRECT LOGIC: The "Floating Footer" *** ---
+        # --- *** NEW LOGIC: Move the Footer to the End *** ---
+        # This logic only runs for panels AFTER the first one.
         if not is_first_panel_run:
             FOOTER_HEIGHT = 6
             
             # 1. Find the end of the newly compacted schedule.
             final_schedule_end_row = find_last_schedule_row(ws_to_modify, start_row=write_row, column_to_check=3)
             
-            # 2. Find the footer's current start row by a unique value.
-            #    We assume the footer is right after the new panel was added.
-            footer_current_start_row = last_schedule_row + 1
-            
-            # 3. The new, correct location is right after the final schedule's total.
-            new_footer_start_row = final_schedule_end_row + 1
-            
-            # 4. Calculate how many rows to shift the block.
-            row_shift = new_footer_start_row - footer_current_start_row
-            
-            # 5. Define the range to move, e.g., "A31:AR36"
-            move_range_str = f"A{footer_current_start_row}:AR{footer_current_start_row + FOOTER_HEIGHT - 1}"
-            
-            # 6. Use the built-in `move_range` to safely "cut and paste" the footer.
-            #    `translate=True` ensures formulas inside the footer are also adjusted.
-            if row_shift != 0:
-                 ws_to_modify.move_range(move_range_str, rows=row_shift, translate=True)
+            # 2. Find the footer's current start row. It's always after the LAST schedule before the cleanup.
+            #    The new panel was inserted at last_schedule_row + 1. The footer is right after that.
+            #    Wait, this logic is too complex. Let's find it by a unique cell value.
+            footer_current_start_row = 0
+            for r in range(1, ws_to_modify.max_row + 1):
+                # We'll use the unique text "Eng'r Motaz Abu Jubara" in column B to find the footer block.
+                # NOTE: Ensure this text is unique and consistent in your template.
+                if "Eng'r Motaz Abu Jubara" in str(ws_to_modify.cell(row=r, column=2).value):
+                     footer_current_start_row = r - 1 # The footer block starts one row above this cell
+                     break
+
+            if footer_current_start_row > 0:
+                # 3. The new location for the footer is right after the final, compacted schedule's total.
+                new_footer_start_row = final_schedule_end_row + 1
+                
+                # 4. Calculate how many rows to shift the block down.
+                row_shift = new_footer_start_row - footer_current_start_row
+                
+                # 5. Define the full range to move: "A<start>:AR<end>"
+                move_range_str = f"A{footer_current_start_row}:AR{footer_current_start_row + FOOTER_HEIGHT - 1}"
+                
+                # 6. Use the built-in `move_range` to safely "cut and paste" the footer.
+                if row_shift != 0:
+                     ws_to_modify.move_range(move_range_str, rows=row_shift, translate=True)
 
         # --- Save and Return ---
         out = io.BytesIO()
