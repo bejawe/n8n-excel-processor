@@ -14,7 +14,6 @@ app = FastAPI()
 # HELPER FUNCTIONS
 # ==============================================================================
 def copy_cell_with_formula_translation(src_cell, dst_cell):
-    # Copies cell content and translates formulas
     if src_cell.hyperlink:
         dst_cell.hyperlink = copy(src_cell.hyperlink)
     if src_cell.has_style:
@@ -35,9 +34,6 @@ def copy_cell_with_formula_translation(src_cell, dst_cell):
         dst_cell.value = src_cell.value
 
 def find_last_schedule_row(worksheet):
-    """
-    Finds the row number of the last 'TOTAL' in the final schedule.
-    """
     for row_num in range(worksheet.max_row, 1, -1):
         cell_value = worksheet.cell(row=row_num, column=3).value
         if isinstance(cell_value, str) and "TOTAL" in cell_value.upper():
@@ -116,7 +112,7 @@ async def process_panel(
             ref = main_rec.get("matchedPart", {}).get("Reference number", "")
             cell.value = ref
             if "RCBO" in main_rec.get("breakerSpec", ""):
-                cell.font = Font(color="FF0000")
+                cell.font = Font(name="Montserrat", size=8, color="550000")
 
         branch_recs = [r for r in recommendations if "MCCB" not in r.get("breakerSpec", "")]
         for i, rec in enumerate(branch_recs):
@@ -127,7 +123,7 @@ async def process_panel(
                 ref = rec.get("matchedPart", {}).get("Reference number", "")
                 cell.value = ref
                 if "RCBO" in rec.get("breakerSpec", ""):
-                    cell.font = Font(color="FF0000")
+                    cell.font = Font(name="Montserrat", size=8, color="550000")
 
         ws_to_modify.cell(row=row + 23, column=3).value = "TOTAL"
 
