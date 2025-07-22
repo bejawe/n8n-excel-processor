@@ -11,9 +11,10 @@ from openpyxl.utils import get_column_letter
 app = FastAPI()
 
 # ==============================================================================
-# HELPER FUNCTIONS (Validated and Unchanged)
+# HELPER FUNCTIONS (WITH THE FINAL FIX)
 # ==============================================================================
 def copy_cell_with_formula_translation(src_cell, dst_cell):
+    # (This function is unchanged and correct)
     if src_cell.hyperlink:
         dst_cell.hyperlink = copy(src_cell.hyperlink)
     if src_cell.has_style:
@@ -33,18 +34,21 @@ def copy_cell_with_formula_translation(src_cell, dst_cell):
     else:
         dst_cell.value = src_cell.value
 
-def find_correct_insertion_row(worksheet):
-    for row in range(worksheet.max_row, 1, -1):
-        cell_value = worksheet.cell(row=row, column=2).value
-        if cell_value and "Eng'r Motaz Abu Jubara" in str(cell_value):
-            return row - 1
+def find_last_schedule_row(worksheet):
+    """
+    Finds the row number of the last 'TOTAL' in the final schedule.
+    This is now the single source of truth for finding the end of the data.
+    """
     for row_num in range(worksheet.max_row, 1, -1):
+        # We check column C for the schedule's "TOTAL" text.
         cell_value = worksheet.cell(row=row_num, column=3).value
         if isinstance(cell_value, str) and "TOTAL" in cell_value.upper():
-            return row_num + 1
-    return 31
+            return row_num
+            
+    return 30 # Fallback for a clean template, where the template total is at row 30.
 
 def is_template_empty(worksheet, check_row, check_col):
+    # (This function is unchanged and correct)
     cell_value = worksheet.cell(row=check_row, column=check_col).value
     return cell_value is None or "N/A" in str(cell_value)
 
@@ -60,7 +64,7 @@ async def process_panel(
         raise HTTPException(status_code=400, detail="Invalid file format.")
 
     try:
-        # --- This section is your working code, UNCHANGED ---
+        # --- This section is your working code, with the final fix ---
         panel_data = json.loads(panel_data_json)
         contents = await file.read()
         wb_to_modify = openpyxl.load_workbook(io.BytesIO(contents), keep_vba=True)
@@ -69,14 +73,20 @@ async def process_panel(
         pristine_ws = pristine_template_wb.active
 
         TEMPLATE_START_ROW = 7
-        TEMPLATE_END_ROW = 30
-        TEMPLATE_HEIGHT = TEMPLATE_END_ROW - TEMPLATE_START_ROW + 1
+        TEMPLATE_HEIGHT = 24
         TEMPLATE_COLUMN_COUNT = 44
 
         if is_template_empty(ws_to_modify, check_row=20, check_col=9):
             write_row = TEMPLATE_START_ROW
         else:
-            insertion_row = find_correct_insertion_row(ws_to_modify)
+            # --- THE FINAL FIX ---
+            # 1. Find the last schedule's TOTAL row.
+            last_total_row = find_last_schedule_row(ws_to_modify)
+            
+            # 2. The insertion point is the very next row.
+            insertion_row = last_total_row + 1
+            
+            # The rest of the logic remains the same.
             ws_to_modify.insert_rows(insertion_row, amount=TEMPLATE_HEIGHT)
 
             for r_offset in range(TEMPLATE_HEIGHT):
@@ -97,33 +107,28 @@ async def process_panel(
             if column_letter in pristine_ws.column_dimensions:
                 ws_to_modify.column_dimensions[column_letter].width = pristine_ws.column_dimensions[column_letter].width
         
-        # --- *** THE FIX: Restoring the full data-writing logic *** ---
+        # --- Write Panel-Specific Data (Unchanged) ---
         row = write_row
-        
+        # (...all other data writing logic is the same...)
         ws_to_modify.cell(row=row, column=4).value = panel_data.get("panelName")
         ws_to_modify.cell(row=row + 6, column=7).value = panel_data.get("mountingType", "SURFACE")
         ws_to_modify.cell(row=row + 7, column=7).value = panel_data.get("ipDegree")
-
         link_cell = ws_to_modify.cell(row=row + 11, column=1)
         source_image_url = panel_data.get("sourceImageUrl")
         if source_image_url:
             link_cell.value = "panel image"
             link_cell.hyperlink = source_image_url
             link_cell.font = Font(color="0000FF", underline="single")
-
         recommendations = panel_data.get("recommendations", [])
-        
         main_rec = next((r for r in recommendations if "MCCB" in r.get("breakerSpec", "")), None)
         if main_rec:
             ws_to_modify.cell(row=row + 11, column=9).value = main_rec.get("matchedPart", {}).get("Reference number", "")
-        
         branch_recs = [r for r in recommendations if "MCCB" not in r.get("breakerSpec", "")]
         for i, rec in enumerate(branch_recs):
             current_row = row + 13 + i
             if current_row <= (row + TEMPLATE_HEIGHT - 1):
                 ws_to_modify.cell(row=current_row, column=6).value = rec.get("quantity")
                 ws_to_modify.cell(row=current_row, column=9).value = rec.get("matchedPart", {}).get("Reference number", "")
-        
         ws_to_modify.cell(row=row + 23, column=3).value = "TOTAL"
         
         # --- Clean Up Unused "OUTGOINGS" Rows (Unchanged) ---
