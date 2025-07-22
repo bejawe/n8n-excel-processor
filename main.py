@@ -112,7 +112,7 @@ async def process_panel(
             ref = main_rec.get("matchedPart", {}).get("Reference number", "")
             cell.value = ref
             if "RCBO" in main_rec.get("breakerSpec", ""):
-                cell.font = Font(name="Montserrat", size=8, color="8B0000")  # Reverted to #8B0000
+                cell.font = Font(name="Montserrat", size=8, color="e50000")  # New red
 
         branch_recs = [r for r in recommendations if "MCCB" not in r.get("breakerSpec", "")]
         for i, rec in enumerate(branch_recs):
@@ -123,7 +123,7 @@ async def process_panel(
                 ref = rec.get("matchedPart", {}).get("Reference number", "")
                 cell.value = ref
                 if "RCBO" in rec.get("breakerSpec", ""):
-                    cell.font = Font(name="Montserrat", size=8, color="8B0000")  # Reverted to #8B0000
+                    cell.font = Font(name="Montserrat", size=8, color="e50000")  # New red
 
         ws_to_modify.cell(row=row + 23, column=3).value = "TOTAL"
 
