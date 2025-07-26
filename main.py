@@ -93,7 +93,8 @@ async def process_panel(
                 ws_to_modify.column_dimensions[column_letter].width = pristine_ws.column_dimensions[column_letter].width
 
         # --- Manually correct formula in column L of the total row ---
-        total_row = write_row + TEMPLATE_HEIGHT - 1  # Last row of the schedule block
+        # The total row is always 17 rows after the start row (write_row + 17)
+        total_row = write_row + 17  # This is the correct total row based on your examples
         formula_cell = ws_to_modify.cell(row=total_row, column=12)  # Column L is column 12
         formula = f'=ROUND(((SUMIFS(AB:AB,H:H,H{total_row})*AC{total_row})+AD{total_row})*(1+#REF!),0)'
         formula_cell.value = formula
