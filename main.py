@@ -92,13 +92,6 @@ async def process_panel(
             if column_letter in pristine_ws.column_dimensions:
                 ws_to_modify.column_dimensions[column_letter].width = pristine_ws.column_dimensions[column_letter].width
 
-        # --- Manually correct formula in column L of the total row ---
-        # The total row is always 17 rows after the start row (write_row + 17)
-        total_row = write_row + 17  # This is the correct total row based on your examples
-        formula_cell = ws_to_modify.cell(row=total_row, column=12)  # Column L is column 12
-        formula = f'=ROUND(((SUMIFS(AB:AB,H:H,H{total_row})*AC{total_row})+AD{total_row})*(1+#REF!),0)'
-        formula_cell.value = formula
-
         # --- Write Panel-Specific Data (with RCBO Highlighting) ---
         row = write_row
         ws_to_modify.cell(row=row, column=4).value = panel_data.get("panelName")
@@ -137,6 +130,7 @@ async def process_panel(
         # --- Clean Up Unused "OUTGOINGS" Rows ---
         outgoings_start_row = row + 13
         outgoings_end_row = row + 22
+        rows_deleted = 0
         for row_to_check in range(outgoings_end_row, outgoings_start_row - 1, -1):
             qty_cell = ws_to_modify.cell(row=row_to_check, column=6)
             part_num_cell = ws_to_modify.cell(row=row_to_check, column=9)
@@ -144,6 +138,14 @@ async def process_panel(
             qty_is_default = (qty_cell.value == 1)
             if part_num_is_default and qty_is_default:
                 ws_to_modify.delete_rows(row_to_check, 1)
+                rows_deleted += 1
+
+        # --- Correct the formula in column L of the TOTAL row after cleanup ---
+        # The TOTAL row moves up by the number of deleted rows
+        actual_total_row = (row + 23) - rows_deleted
+        formula_cell = ws_to_modify.cell(row=actual_total_row, column=12)  # Column L is column 12
+        formula = f'=ROUND(((SUMIFS(AB:AB,H:H,H{actual_total_row})*AC{actual_total_row})+AD{actual_total_row})*(1+#REF!),0)'
+        formula_cell.value = formula
 
         # --- Save and Return ---
         out = io.BytesIO()
