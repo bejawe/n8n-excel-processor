@@ -140,15 +140,19 @@ async def process_panel(
                 ws_to_modify.delete_rows(row_to_check, 1)
                 rows_deleted += 1
 
-        # --- Correct the formula in column L of the TOTAL row after cleanup ---
+        # --- Correct formulas in the TOTAL row after cleanup ---
         # The TOTAL row moves up by the number of deleted rows
         actual_total_row = (row + 23) - rows_deleted
-        formula_cell = ws_to_modify.cell(row=actual_total_row, column=12)  # Column L is column 12
-        
-        # THIS IS THE CORRECTED LINE OF CODE:
-        formula = f'=ROUND(((SUMIFS(AB:AB,H:H,H{actual_total_row})*AC{actual_total_row})+AD{actual_total_row})*(1+Estimation!$R$3),0)'
-        
-        formula_cell.value = formula
+
+        # --- Formula for Column J (Unit Price) ---
+        formula_cell_J = ws_to_modify.cell(row=actual_total_row, column=10)  # Column J is column 10
+        formula_J = f'=SUMIFS(K:K,H:H,H{actual_total_row})'
+        formula_cell_J.value = formula_J
+
+        # --- Formula for Column L (TOTAL) ---
+        formula_cell_L = ws_to_modify.cell(row=actual_total_row, column=12)  # Column L is column 12
+        formula_L = f'=ROUND(((SUMIFS(AB:AB,H:H,H{actual_total_row})*AC{actual_total_row})+AD{actual_total_row})*(1+Estimation!$R$3),0)'
+        formula_cell_L.value = formula_L
 
         # --- Save and Return ---
         out = io.BytesIO()
