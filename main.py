@@ -144,7 +144,10 @@ async def process_panel(
         # The TOTAL row moves up by the number of deleted rows
         actual_total_row = (row + 23) - rows_deleted
         formula_cell = ws_to_modify.cell(row=actual_total_row, column=12)  # Column L is column 12
-        formula = f'=ROUND(((SUMIFS(AB:AB,H:H,H{actual_total_row})*AC{actual_total_row})+AD{actual_total_row})*(1+#REF!),0)'
+        
+        # THIS IS THE CORRECTED LINE OF CODE:
+        formula = f'=ROUND(((SUMIFS(AB:AB,H:H,H{actual_total_row})*AC{actual_total_row})+AD{actual_total_row})*(1+Estimation!$R$3),0)'
+        
         formula_cell.value = formula
 
         # --- Save and Return ---
