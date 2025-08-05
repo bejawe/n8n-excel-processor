@@ -92,12 +92,21 @@ async def process_panel(
             if column_letter in pristine_ws.column_dimensions:
                 ws_to_modify.column_dimensions[column_letter].width = pristine_ws.column_dimensions[column_letter].width
 
-        # --- Write Panel-Specific Data (with RCBO Highlighting) ---
+        # --- Write Panel-Specific Data ---
         row = write_row
         ws_to_modify.cell(row=row, column=4).value = panel_data.get("panelName")
         ws_to_modify.cell(row=row + 6, column=7).value = panel_data.get("mountingType", "SURFACE")
         ws_to_modify.cell(row=row + 7, column=7).value = panel_data.get("ipDegree")
 
+        # --- Add Static and Relative Formulas ---
+        # These formulas are placed at fixed offsets from the start of the schedule
+        ws_to_modify.cell(row=row + 7, column=9).value = '=IF(COUNTIF(D:D,@INDIRECT(ADDRESS(ROW()-7,COLUMN()-5)))>1,"REPEATED NAME","")'
+        ws_to_modify.cell(row=row + 8, column=9).value = '=IF(ISNUMBER(SEARCH("SLEEVES",INDIRECT("D"&ROW()+1))),"SLEEVES","")'
+        ws_to_modify.cell(row=row + 7, column=10).value = '=INDIRECT("G"&ROW()+1)'
+        ws_to_modify.cell(row=row + 9, column=10).value = '=IF(ISNUMBER(SEARCH("SILVER",INDIRECT("D"&ROW()+1))),"SILVER","")'
+        ws_to_modify.cell(row=row + 8, column=11).value = '=IF(ISNUMBER(SEARCH("STAINLESS",(INDIRECT("G"&ROW()-5)))),"STAINLESS","")'
+
+        # --- Write hyperlink and breaker recommendations ---
         link_cell = ws_to_modify.cell(row=row + 11, column=1)
         source_image_url = panel_data.get("sourceImageUrl")
         if source_image_url:
@@ -111,11 +120,10 @@ async def process_panel(
             cell = ws_to_modify.cell(row=row + 11, column=9)
             ref = main_rec.get("matchedPart", {}).get("Reference number", "")
             cell.value = ref
-            # Explicitly set font color for main breaker
             if "RCBO" in main_rec.get("breakerSpec", ""):
-                cell.font = Font(name="Montserrat", size=8, color="e50000")  # Red for RCBO
+                cell.font = Font(name="Montserrat", size=8, color="e50000")
             else:
-                cell.font = Font(name="Montserrat", size=8, color="000000")  # Black for others
+                cell.font = Font(name="Montserrat", size=8, color="000000")
 
         branch_recs = [r for r in recommendations if "MCCB" not in r.get("breakerSpec", "")]
         for i, rec in enumerate(branch_recs):
@@ -125,11 +133,10 @@ async def process_panel(
                 cell = ws_to_modify.cell(row=current_row, column=9)
                 ref = rec.get("matchedPart", {}).get("Reference number", "")
                 cell.value = ref
-                # Explicitly set the font color based on the breaker type
                 if "RCBO" in rec.get("breakerSpec", ""):
-                    cell.font = Font(name="Montserrat", size=8, color="e50000")  # Red for RCBO
+                    cell.font = Font(name="Montserrat", size=8, color="e50000")
                 else:
-                    cell.font = Font(name="Montserrat", size=8, color="000000")  # Black for all others (MCB)
+                    cell.font = Font(name="Montserrat", size=8, color="000000")
 
         ws_to_modify.cell(row=row + 23, column=3).value = "TOTAL"
 
